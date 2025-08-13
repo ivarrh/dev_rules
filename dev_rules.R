@@ -87,50 +87,123 @@ mod1 = glmer(violation ~ group * (text * purpose) + (1 | subj_id) + (1 | scen),
                                     optCtrl = list(method = "nlminb")))
 
 car::Anova(mod1)
-jtools::summ(mod1)
-emmeans(mod1, pairwise ~ group | text * purpose, type = 'response')
+
 emtrends(mod1, pairwise ~ group, var = 'text')
 emtrends(mod1, pairwise ~ group, var = 'purpose')
 
-dev_supp <- read_excel("data_reglas.xlsx") %>%
+filename3 = "Data/supp_data.csv"
+
+headers = read_csv(filename3, col_names = FALSE, n_max = 1)
+headers
+# Raw data (deleting 3 rows)
+supp_rules = read_csv(filename3, skip = 3, col_names = FALSE)
+# Naming raw date (with "headers")
+colnames(supp_rules) = headers
+glimpse(supp_rules)
+colnames(supp_rules)[19:66] = c('c1t', 'c1m', 'n1t', 'n1m', 'u1t', 'u1m',  'o1t', 'o1m',
+                                'c2t', 'c2m', 'n2t','n2m', 'o2t', 'o2m', 'u2t', 'u2m',
+                                'n3t', 'n3m', 'c3t', 'c3m', 'o3t', 'o3m', 'u3t', 'u3m',
+                                'c4t', 'c4m', 'n4t', 'n4m', 'u4t', 'u4m', 'o4t', 'o4m',
+                                'c5t', 'c5m', 'n5t', 'n5m', 'o5t', 'o5m', 'u5t', 'u5m',
+                                'n6t', 'n6m', 'c6t', 'c6m', 'o6t', 'o6m', 'u6t', 'u6m')
+
+ggplot(supp_rules, aes(x = LocationLongitude, y = LocationLatitude, 
+                       color = as.factor(Nielsen))) + 
+  geom_jitter()
+
+supp_rules %>%
+  filter(Progress == 100) %>%
+  summarise(mean(gender == 2, na.rm = TRUE), 
+            n())
+
+supp_means = supp_rules %>%
+  select(c1t:u6m) %>%
+  gather() %>%
+  mutate(predictor = str_sub(key, -1, -1),
+         key = str_sub(key, 1, 2)) %>%
+  group_by(key, predictor) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE)) %>%
+  pivot_wider(names_from = 'predictor', values_from = 'mean_value') %>%
+  rename(literal = t, moral = m) %>%
+  mutate(moral = (5 - mean(moral))/4, 
+         literal = 2 - mean(literal))
+
+supp_means %>%
+  group_by(str_sub(key, 1, 1)) %>%
+  summarise(mean(moral), 
+            mean(literal))
+
+names(supp_children) = c('child_id', 'codigo2', 'grupo', 'sex',
+                         'edad', 'edad_meses', 'date', 'birth_date',
+                         'stroop_score', 'tom_1', 'tom_2', 'tom_3',
+                         'tom_4', 'tom_5', 'tom_6', 'tom_7', 'tom_8',
+                         'tom_9', 'tom_total', 'comments_tom', 'forward',
+                         'fwd_score', 'span_1', 'backward', 'bwd_score',
+                         'span_2', 'comments')
+
+supp_children <- read_excel("Data/data_reglas.xlsx") %>%
   filter(!is.na(CODIGO))
-names(dev_supp) = c('codigo', 'codigo2', 'grupo', 'sex',
-                    'edad', 'edad_meses', 'date', 'birth_date',
-                    'stroop_score', 'tom_1', 'tom_2', 'tom_3',
-                    'tom_4', 'tom_5', 'tom_6', 'tom_7', 'tom_8',
-                    'tom_9', 'tom_total', 'comments_tom', 'forward',
-                    'fwd_score', 'span_1', 'backward', 'bwd_score',
-                    'span_2', 'comments')
-glimpse(dev_supp)
-dev_long = left_join(dev_long, dev_supp, join_by(id == codigo))
-dev_long = dev_long %>%
+
+dev_long = left_join(dev_long, supp_children, by = 'child_id') %>%
   mutate(stroop_ctr = stroop_score - 22,
-         meses_ctr = edad_meses - 85,
+         meses_ctr = edad_meses - 85, # median age in months = 85
          tom_ctr = as.numeric(tom_total) - 7,
          fw_ctr = as.numeric(forward) - 6,
          bw_ctr = as.numeric(backward) - 6)
 
-cor.test(~ stroop_score + edad_meses, dev_supp, method = 'spearman')
-cor.test(~ as.numeric(tom_total) + edad_meses, dev_supp, method = 'spearman')
-cor.test(~ as.numeric(forward) + edad_meses, dev_supp, method = 'spearman')
-cor.test(~ as.numeric(backward) + edad_meses, dev_supp, method = 'spearman')
+dev_long = full_join(dev_long, supp_means, by = 'key')
 
-mod2 = glmer(violation ~ meses_ctr * (text * purpose) + (1 | ResponseId) + (1 | scen),
-             data = dev_long, family = 'binomial')
+model_supp = glmer(violation ~ group * (moral + literal) + (1 | subj_id) + (1 | scen),
+                data = dev_long, family = 'binomial', 
+                control = glmerControl(optimizer = "optimx", 
+                                       optCtrl = list(method = "nlminb")))
+car::Anova(model_supp)
+emtrends(model_supp, pairwise ~ group, var = 'moral')
+emtrends(model_supp, pairwise ~ group, var = 'literal')
 
+stroop_data = read_excel("Data/data_reglas.xlsx", sheet = "STROOP (TD)") %>%
+  mutate(congruent = if_else(ITEM <= 12, 'Con', 'Inc')) %>%
+  rename(child_id = CODIGO) %>%
+  group_by(child_id, congruent) %>%
+  summarise(rt = median(`RT ONSET (SECONDS,MS)`, na.rm = TRUE), 
+            resp = mean(ERROR, na.rm = TRUE)) %>%
+  pivot_wider(names_from = 'congruent', values_from = c('rt', 'resp'))
+
+wilcox.test(stroop_data$rt_Con, stroop_data$rt_Inc)
+wilcox.test(stroop_data$resp_Con, stroop_data$resp_Inc)
+
+dev_long = full_join(dev_long, stroop_data, by = 'child_id')
+
+dev_long = dev_long %>% 
+  mutate(efficiency_congruent = scale(rt_Con/resp_Con),
+         efficiency_incongruent = scale(rt_Inc/resp_Inc), 
+         meses_z = scale(edad_meses))
+
+mod2 = glmer(violation ~ meses_ctr * (text * purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "nlminb")))
 car::Anova(mod2)
-jtools::summ(mod2, exp = TRUE)
 emtrends(mod2, pairwise ~ text, var = 'meses_ctr')
 emtrends(mod2, pairwise ~ purpose, var = 'meses_ctr')
 
-interactions::interact_plot(mod2, pred = 'meses_ctr', modx = 'text', 
-                            mod2 = 'purpose', interval = TRUE)
-interactions::interact_plot(mod2, pred = 'meses_ctr', modx = 'purpose')
+children_cog_measures = dev_long %>%
+  select(child_id, edad_meses, tom_total, forward, backward, 
+         efficiency_congruent, efficiency_incongruent) %>%
+  distinct() %>%
+  filter(!is.na(child_id))
+
+cor.test(~ as.numeric(efficiency_congruent) + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ as.numeric(efficiency_incongruent) + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ as.numeric(tom_total) + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ as.numeric(forward) + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ as.numeric(backward) + edad_meses, children_cog_measures, method = 'spearman')
 
 mod3 = glmer(violation ~ (meses_ctr + stroop_ctr) * (text + purpose) + (1 | ResponseId) + (1 | scen),
              data = dev_long, family = 'binomial', 
              control = glmerControl(optimizer = "optimx", 
                                     optCtrl = list(method = "bobyqa")))
+
 mod3no = glmer(violation ~ (stroop_ctr) * (text * purpose) + (1 | ResponseId) + (1 | scen),
                data = dev_long, family = 'binomial', 
                control = glmerControl(optimizer = "optimx", 
@@ -195,27 +268,6 @@ emtrends(mod6no, pairwise ~ purpose, var = 'bw_ctr')
 interactions::interact_plot(mod6, pred = 'bw_ctr', modx = 'text', 
                             mod2 = 'purpose', interval = TRUE)
 
-stroop_data = stroop_times %>%
-  mutate(congruent = if_else(ITEM <= 12, 'Con', 'Inc')) %>%
-  group_by(CODIGO, congruent) %>%
-  summarise(rt = median(`RT ONSET (SECONDS,MS)`, na.rm = TRUE), 
-            resp = mean(ERROR, na.rm = TRUE)) %>%
-  pivot_wider(names_from = 'congruent', values_from = c('rt', 'resp'))
-
-wilcox.test(stroop_data$rt_Con, stroop_data$rt_Inc)
-wilcox.test(stroop_data$resp_Con, stroop_data$resp_Inc)
-
-View(stroop_data)
-dev_long = full_join(dev_long, stroop_data, join_by(id == CODIGO))
-
-dev_long = dev_long %>% 
-  mutate(diff_rt = rt_Inc - rt_Con, 
-         diff_resp = resp_Con - resp_Inc, 
-         interference = scale(diff_rt) + scale(diff_resp), 
-         efficiency_congruent = scale(rt_Con/resp_Con),
-         efficiency_incongruent = scale(rt_Inc/resp_Inc), 
-         meses_z = scale(edad_meses),
-         efficiency_loss = scale(efficiency_incongruent - efficiency_congruent))
 
 mod3s = glmer(violation ~ (meses_z + efficiency_congruent + efficiency_incongruent) * (text * purpose) + (1 | ResponseId) + (1 | scen),
               data = dev_long, family = 'binomial', 
@@ -450,48 +502,7 @@ ggpubr::ggarrange(devfig1a, devfig1b, nrow = 1, align = 'h',
 
 ggsave("dev_rules_panel.jpg", width = 24, height = 14, units = 'cm')
 
-filename = "Reglas+supp_May+15,+2025_08.58.csv"
 
-headers = read_csv(filename, col_names = FALSE, n_max = 1)
-headers
-# Raw data (deleting 3 rows)
-supp_rules = read_csv(filename, skip = 3, col_names = FALSE)
-# Naming raw date (with "headers")
-colnames(supp_rules) = headers
-glimpse(supp_rules)
-colnames(supp_rules)[19:66] = c('c1t', 'c1m', 'n1t', 'n1m', 'u1t', 'u1m',  'o1t', 'o1m',
-                                'c2t', 'c2m', 'n2t','n2m', 'o2t', 'o2m', 'u2t', 'u2m',
-                                'n3t', 'n3m', 'c3t', 'c3m', 'o3t', 'o3m', 'u3t', 'u3m',
-                                'c4t', 'c4m', 'n4t', 'n4m', 'u4t', 'u4m', 'o4t', 'o4m',
-                                'c5t', 'c5m', 'n5t', 'n5m', 'o5t', 'o5m', 'u5t', 'u5m',
-                                'n6t', 'n6m', 'c6t', 'c6m', 'o6t', 'o6m', 'u6t', 'u6m')
-
-ggplot(supp_rules, aes(x = LocationLongitude, y = LocationLatitude)) + 
-  geom_jitter()
-
-supp_means = supp_rules %>%
-  select(c1t:u6m) %>%
-  gather() %>%
-  mutate(predictor = str_sub(key, -1, -1),
-         key = str_sub(key, 1, 2)) %>%
-  group_by(key, predictor) %>%
-  summarise(mean_value = mean(value, na.rm = TRUE)) %>%
-  pivot_wider(names_from = 'predictor', values_from = 'mean_value')
-
-supp_means %>%
-  group_by(str_sub(key, 1, 1)) %>%
-  summarise((5 - mean(m))/4, 2- mean(t))
-
-dev_long = full_join(dev_long, supp_means, by = 'key')
-
-dev_long = dev_long %>%
-  mutate(t = 2 - t, 
-         m = (5 - m)/4)
-
-model_s = glm(violation ~ group * (m + t), dev_long, family = 'binomial')
-car::Anova(model_s)
-emtrends(model_s, pairwise ~ group, var = 'm')
-emtrends(model_s, pairwise ~ group, var = 't')
 
 model_s = glmer(violation ~ meses_ctr * (t + m) + (1 | ResponseId) + (1 | scen),
                 data = dev_long, family = 'binomial', 
