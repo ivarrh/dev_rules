@@ -88,8 +88,13 @@ mod1 = glmer(violation ~ group * (text * purpose) + (1 | subj_id) + (1 | scen),
 
 car::Anova(mod1)
 
-emtrends(mod1, pairwise ~ group, var = 'text')
-emtrends(mod1, pairwise ~ group, var = 'purpose')
+emtrends(mod1, pairwise ~ group, var = 'text')$contrasts %>%
+  data.frame() %>%
+  mutate(OR = exp(estimate))
+
+emtrends(mod1, pairwise ~ group, var = 'purpose')$contrasts %>%
+  data.frame() %>%
+  mutate(OR = exp(estimate))
 
 filename3 = "Data/supp_data.csv"
 
@@ -158,8 +163,44 @@ model_supp = glmer(violation ~ group * (moral + literal) + (1 | subj_id) + (1 | 
                 control = glmerControl(optimizer = "optimx", 
                                        optCtrl = list(method = "nlminb")))
 car::Anova(model_supp)
+
 emtrends(model_supp, pairwise ~ group, var = 'moral')
-emtrends(model_supp, pairwise ~ group, var = 'literal')
+emtrends(model_supp, pairwise ~ group, var = 'literal')$contrasts %>%
+  data.frame() %>%
+  mutate(OR = exp(estimate))
+
+model_months = glmer(violation ~ meses_ctr * (text * purpose) + (1 | child_id) + (1 | scen),
+                   data = subset(dev_long, !is.na(meses_ctr)), family = 'binomial', 
+                   control = glmerControl(optimizer = "optimx", 
+                                          optCtrl = list(method = "bobyqa")))
+car::Anova(model_months)
+
+emtrends(model_months, pairwise ~ text, var = 'meses_ctr')$contrasts %>%
+  data.frame() %>%
+  mutate(estimate = -estimate,
+         z.ratio = -z.ratio,
+        OR = exp(estimate))
+
+emtrends(model_months, pairwise ~ purpose, var = 'meses_ctr')$contrasts %>%
+  data.frame() %>%
+  mutate(estimate = -estimate,
+         z.ratio = -z.ratio,
+         OR = exp(estimate))
+
+model_supp_months = glmer(violation ~ meses_ctr * (moral + literal) + (1 | subj_id) + (1 | scen),
+                   data = subset(dev_long, !is.na(meses_ctr)), family = 'binomial', 
+                   control = glmerControl(optimizer = "optimx", 
+                                          optCtrl = list(method = "nlminb")))
+car::Anova(model_supp_months)
+
+emtrends(model_supp_months, pairwise ~ moral, var = 'meses_ctr',
+         at = list(moral = c(1,0)))$contrasts %>%
+  data.frame() %>%
+  mutate(OR = exp(estimate))
+emtrends(model_supp_months, pairwise ~ literal, var = 'meses_ctr',
+         at = list(literal = c(1,0)))$contrasts %>%
+  data.frame() %>%
+  mutate(OR = exp(estimate))
 
 stroop_data = read_excel("Data/data_reglas.xlsx", sheet = "STROOP (TD)") %>%
   mutate(congruent = if_else(ITEM <= 12, 'Con', 'Inc')) %>%
@@ -175,9 +216,9 @@ wilcox.test(stroop_data$resp_Con, stroop_data$resp_Inc)
 dev_long = full_join(dev_long, stroop_data, by = 'child_id')
 
 dev_long = dev_long %>% 
-  mutate(efficiency_congruent = scale(rt_Con/resp_Con),
-         efficiency_incongruent = scale(rt_Inc/resp_Inc), 
-         meses_z = scale(edad_meses))
+  mutate(efficiency_congruent = scale(rt_Con/resp_Con)[,1],
+         efficiency_incongruent = scale(rt_Inc/resp_Inc)[,1], 
+         meses_z = scale(edad_meses)[,1])
 
 mod2 = glmer(violation ~ meses_ctr * (text * purpose) + (1 | subj_id) + (1 | scen),
              data = dev_long, family = 'binomial', 
@@ -189,176 +230,172 @@ emtrends(mod2, pairwise ~ purpose, var = 'meses_ctr')
 
 children_cog_measures = dev_long %>%
   select(child_id, edad_meses, tom_total, forward, backward, 
-         efficiency_congruent, efficiency_incongruent) %>%
+         rt_Con, resp_Con, rt_Inc, resp_Inc) %>%
   distinct() %>%
-  filter(!is.na(child_id))
+  filter(!is.na(child_id)) %>%
+  mutate(across(edad_meses:resp_Inc, as.numeric), 
+         efficiency_congruent = rt_Con/resp_Con,
+         efficiency_incongruent = rt_Inc/resp_Inc) %>%
+  select(-rt_Con, -resp_Con, -rt_Inc, -resp_Inc)
 
-cor.test(~ as.numeric(efficiency_congruent) + edad_meses, children_cog_measures, method = 'spearman')
-cor.test(~ as.numeric(efficiency_incongruent) + edad_meses, children_cog_measures, method = 'spearman')
-cor.test(~ as.numeric(tom_total) + edad_meses, children_cog_measures, method = 'spearman')
-cor.test(~ as.numeric(forward) + edad_meses, children_cog_measures, method = 'spearman')
-cor.test(~ as.numeric(backward) + edad_meses, children_cog_measures, method = 'spearman')
+firth_params <- data.frame(
+  child_id = character(),
+  intercept = character(),
+  text = character(),
+  purpose = character()
+)
 
-mod3 = glmer(violation ~ (meses_ctr + stroop_ctr) * (text + purpose) + (1 | ResponseId) + (1 | scen),
-             data = dev_long, family = 'binomial', 
-             control = glmerControl(optimizer = "optimx", 
-                                    optCtrl = list(method = "bobyqa")))
+for (i in levels(as.factor(dev_long$child_id))) {
+  temp = subset(dev_long, child_id == i)
+  
+  mod_temp = logistf(violation ~ text + purpose,
+               data = temp)
+  
+  temp_results = summary(mod_temp)$coefficients
+  new_row = c(i, temp_results) 
+  names(new_row) = names(firth_params)
+  
+  firth_params = rbind(firth_params, new_row)
+}
 
-mod3no = glmer(violation ~ (stroop_ctr) * (text * purpose) + (1 | ResponseId) + (1 | scen),
-               data = dev_long, family = 'binomial', 
-               control = glmerControl(optimizer = "optimx", 
-                                      optCtrl = list(method = "bobyqa")))
-car::Anova(mod3)
-emtrends(mod3, pairwise ~ text, var = 'stroop_ctr')
-emtrends(mod3no, pairwise ~ text, var = 'stroop_ctr')
-emtrends(mod3no, pairwise ~ purpose, var = 'stroop_ctr')
-interactions::interact_plot(mod3, pred = 'stroop_ctr', modx = 'text', 
-                            mod2 = 'purpose', interval = TRUE)
+names(firth_params) = c('child_id', 'intercept', 'text', 'purpose')
 
-mod4 = glmer(violation ~ (meses_ctr + tom_ctr) * (text + purpose) + (1 | ResponseId) + (1 | scen),
-             data = dev_long, family = 'binomial', 
-             control = glmerControl(optimizer = "optimx", 
-                                    optCtrl = list(method = "bobyqa")))
-mod4no = glmer(violation ~ (tom_ctr) * (text * purpose) + (1 | ResponseId) + (1 | scen),
-               data = dev_long, family = 'binomial', 
-               control = glmerControl(optimizer = "optimx", 
-                                      optCtrl = list(method = "bobyqa")))
+firth_params = firth_params %>%
+  mutate(intercept = as.double(intercept),
+         text = as.double(text),
+         purpose = as.double(purpose))
 
-car::Anova(mod4)
-car::Anova(mod4no)
-emtrends(mod4, pairwise ~ text, var = 'tom_ctr')
-emtrends(mod4no, pairwise ~ text, var = 'tom_ctr')
-emtrends(mod4no, pairwise ~ purpose, var = 'tom_ctr')
-interactions::interact_plot(mod4, pred = 'tom_ctr', modx = 'text', 
-                            mod2 = 'purpose', interval = TRUE)
+children_all_measures = full_join(children_cog_measures, firth_params)
 
-mod5 = glmer(violation ~  (meses_ctr + fw_ctr)  * (text + purpose) + (1 | ResponseId) + (1 | scen),
-             data = dev_long, family = 'binomial', 
-             control = glmerControl(optimizer = "optimx", 
-                                    optCtrl = list(method = "bobyqa")))
+cor.test(~ efficiency_congruent + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ efficiency_incongruent + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ tom_total + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ forward + edad_meses, children_cog_measures, method = 'spearman')
+cor.test(~ backward + edad_meses, children_cog_measures, method = 'spearman')
 
-mod5no = glmer(violation ~ (fw_ctr) * (text * purpose) + (1 | ResponseId) + (1 | scen),
-               data = dev_long, family = 'binomial', 
-               control = glmerControl(optimizer = "optimx", 
-                                      optCtrl = list(method = "bobyqa")))
+apaTables::apa.cor.table(children_all_measures, filename = 'Analysis/Table1.doc')
 
-car::Anova(mod5)
-car::Anova(mod5no)
-emtrends(mod5, pairwise ~ text, var = 'fw_ctr')
-emtrends(mod5no, pairwise ~ text, var = 'fw_ctr')
-emtrends(mod5no, pairwise ~ purpose, var = 'fw_ctr')
-interactions::interact_plot(mod5, pred = 'fw_ctr', modx = 'text', 
-                            mod2 = 'purpose', interval = TRUE)
-
-mod6 = glmer(violation ~ (meses_ctr + bw_ctr) * (text + purpose) + (1 | ResponseId) + (1 | scen),
-             data = dev_long, family = 'binomial', 
-             control = glmerControl(optimizer = "optimx", 
-                                    optCtrl = list(method = "bobyqa")))
-
-mod6no = glmer(violation ~ (bw_ctr) * (text * purpose) + (1 | ResponseId) + (1 | scen),
+mod3 = glmer(violation ~ (tom_ctr) * (text * purpose) + (1 | subj_id) + (1 | scen),
                data = dev_long, family = 'binomial', 
                control = glmerControl(optimizer = "optimx", 
                                       optCtrl = list(method = "bobyqa")))
 
-car::Anova(mod6)
+mod3age = glmer(violation ~ (meses_ctr + tom_ctr) * (text + purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "bobyqa")))
 
-emtrends(mod6, pairwise ~ text, var = 'bw_ctr')
-emtrends(mod6no, pairwise ~ text, var = 'bw_ctr')
-emtrends(mod6no, pairwise ~ purpose, var = 'bw_ctr')
-interactions::interact_plot(mod6, pred = 'bw_ctr', modx = 'text', 
-                            mod2 = 'purpose', interval = TRUE)
+tom_results = bind_rows(emtrends(mod3, pairwise ~ text, var = 'tom_ctr')$contrasts %>%
+            data.frame(), 
+      emtrends(mod3age, pairwise ~ text, var = 'tom_ctr')$contrasts %>%
+        data.frame(),
+      emtrends(mod3, pairwise ~ purpose, var = 'tom_ctr')$contrasts %>%
+        data.frame(),
+      emtrends(mod3age, pairwise ~ purpose, var = 'tom_ctr')$contrasts %>%
+        data.frame()) %>%
+  mutate(z.ratio = -z.ratio, 
+         OR = exp(-estimate), 
+         moderator = 'ToM')
 
+mod4 = glmer(violation ~ (fw_ctr) * (text * purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "bobyqa")))
 
-mod3s = glmer(violation ~ (meses_z + efficiency_congruent + efficiency_incongruent) * (text * purpose) + (1 | ResponseId) + (1 | scen),
-              data = dev_long, family = 'binomial', 
-              control = glmerControl(optimizer = "optimx", 
-                                     optCtrl = list(method =  "bobyqa")))
+mod4age = glmer(violation ~ (meses_ctr + fw_ctr) * (text + purpose) + (1 | subj_id) + (1 | scen),
+                data = dev_long, family = 'binomial', 
+                control = glmerControl(optimizer = "optimx", 
+                                       optCtrl = list(method = "bobyqa")))
 
-car::Anova(mod3s)
+fw_results = bind_rows(emtrends(mod4, pairwise ~ text, var = 'fw_ctr')$contrasts %>%
+                          data.frame(), 
+                        emtrends(mod4age, pairwise ~ text, var = 'fw_ctr')$contrasts %>%
+                          data.frame(),
+                        emtrends(mod4, pairwise ~ purpose, var = 'fw_ctr')$contrasts %>%
+                          data.frame(),
+                        emtrends(mod4age, pairwise ~ purpose, var = 'fw_ctr')$contrasts %>%
+                          data.frame()) %>%
+  mutate(z.ratio = -z.ratio, 
+         OR = exp(-estimate), 
+         moderator = 'Fwd Digit Span')
 
-strategies= dev_long %>%
-  subset(group != 'peques') %>%
-  select(ResponseId, condition, scen, violation) %>%
-  pivot_wider(names_from = 'condition', values_from = 'violation') %>%
-  mutate(profile = paste(c, o, u, n, sep = "")) %>%
-  group_by(ResponseId, profile) %>%
-  tally() %>%
-  arrange(-n) %>%
-  pivot_wider(names_from = 'profile', values_from = 'n', values_fill = 0) %>%
-  rename(textualist = `1100`, purposivist = `1010`,
-         disjunctive = `1110`, conjunctive = `1000`) %>%
-  mutate(other = 6 - textualist - purposivist - disjunctive - conjunctive, 
-         max_t = textualist - purposivist) %>%
-  select(ResponseId, max_t, textualist:conjunctive) %>%
-  gather(-ResponseId, -max_t, key = 'strategy', value = 'count') %>%
-  mutate(value = if_else(strategy %in% c('purposivist', 'disjunctive'), 
-                         count, -count))
+mod5 = glmer(violation ~ (bw_ctr) * (text * purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "bobyqa")))
 
-ggplot(strategies, aes(x = reorder(ResponseId, -max_t), 
-                       y = value, fill = strategy)) + 
-  geom_col() + 
-  coord_flip()
+mod5age = glmer(violation ~ (meses_ctr + bw_ctr) * (text + purpose) + (1 | subj_id) + (1 | scen),
+                data = dev_long, family = 'binomial', 
+                control = glmerControl(optimizer = "optimx", 
+                                       optCtrl = list(method = "bobyqa")))
 
-
-
-
-emtrends(mod3s, pairwise ~ text, var = 'efficiency_congruent')
-emtrends(mod3s, pairwise ~ purpose, var = 'efficiency_congruent')
-emtrends(mod3s, pairwise ~ text, var = 'efficiency_incongruent')
-emtrends(mod3s, pairwise ~ purpose, var = 'efficiency_incongruent')
-
-
-interactions::interact_plot(mod3s, pred = 'efficiency_incongruent', 
-                            modx = 'text', mod2 = 'purpose', 
-                            interval = TRUE)
-
-interactions::interact_plot(mod3s, pred = 'meses_ctr', 
-                            modx = 'text', mod2 = 'purpose', 
-                            interval = TRUE)
-dev_long %>%
-  select(edad_meses, id, efficiency_congruent, efficiency_loss) %>%
-  unique(.) %>%
-  cor.test(~ efficiency_congruent + edad_meses, ., method = 'spearman')
-
-dev_long %>%
-  select(edad_meses, id, efficiency_congruent, efficiency_incongruent) %>%
-  unique(.) %>%
-  cor.test(~ efficiency_incongruent + edad_meses, ., method = 'spearman')
-
-dev_long %>%
-  select(edad_meses, id, efficiency_congruent, efficiency_incongruent) %>%
-  unique(.) %>%
-  cor.test(~ efficiency_incongruent + edad_meses, .)
-
-dev_long %>%
-  select(edad_meses, id, interference, efficiency_congruent, efficiency_incongruent) %>%
-  unique(.) %>%
-  cor.test(~ interference + edad_meses, .)
+bw_results = bind_rows(emtrends(mod5, pairwise ~ text, var = 'bw_ctr')$contrasts %>%
+                         data.frame(), 
+                       emtrends(mod5age, pairwise ~ text, var = 'bw_ctr')$contrasts %>%
+                         data.frame(),
+                       emtrends(mod5, pairwise ~ purpose, var = 'bw_ctr')$contrasts %>%
+                         data.frame(),
+                       emtrends(mod5age, pairwise ~ purpose, var = 'bw_ctr')$contrasts %>%
+                         data.frame()) %>%
+  mutate(z.ratio = -z.ratio, 
+         OR = exp(-estimate), 
+         moderator = 'Bwd Digit Span')
 
 
-emtrends(mod3s, pairwise ~ text, var = 'interference')
-emtrends(mod3s, pairwise ~ purpose, var = 'rt_Inc')
+mod6 = glmer(violation ~ (efficiency_congruent) * (text * purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "bobyqa")))
 
-dev_long %>%
-  group_by(ResponseId, condition) %>%
-  summarise(stroop = median(stroop_score),
-            response = mean(violation, na.rm = TRUE)) %>%
-  filter(!is.na(stroop))
-dev_long %>%
-  group_by(ResponseId, condition) %>%
-  summarise(stroop = median(stroop_score),
-            response = mean(violation, na.rm = TRUE)) %>%
-  filter(!is.na(stroop)) %>%
-  ggplot(aes(x = 24 - stroop, y = response, color = condition)) +
-  geom_jitter()
+mod6age = glmer(violation ~ (meses_ctr + efficiency_congruent) * (text + purpose) + (1 | subj_id) + (1 | scen),
+                data = dev_long, family = 'binomial', 
+                control = glmerControl(optimizer = "optimx", 
+                                       optCtrl = list(method = "bobyqa")))
 
-dev_long$condition = as.factor(dev_long$condition)
-levels(dev_long$condition2)
+con_results = bind_rows(emtrends(mod6, pairwise ~ text, var = 'efficiency_congruent')$contrasts %>%
+                         data.frame(), 
+                       emtrends(mod6age, pairwise ~ text, var = 'efficiency_congruent')$contrasts %>%
+                         data.frame(),
+                       emtrends(mod6, pairwise ~ purpose, var = 'efficiency_congruent')$contrasts %>%
+                         data.frame(),
+                       emtrends(mod6age, pairwise ~ purpose, var = 'efficiency_congruent')$contrasts %>%
+                         data.frame()) %>%
+  mutate(OR = exp(estimate), 
+         moderator = 'Congruent Stroop')
 
+
+mod7 = glmer(violation ~ (efficiency_incongruent) * (text * purpose) + (1 | subj_id) + (1 | scen),
+             data = dev_long, family = 'binomial', 
+             control = glmerControl(optimizer = "optimx", 
+                                    optCtrl = list(method = "bobyqa")))
+
+mod7age = glmer(violation ~ (meses_ctr + efficiency_incongruent) * (text + purpose) + (1 | subj_id) + (1 | scen),
+                data = dev_long, family = 'binomial', 
+                control = glmerControl(optimizer = "optimx", 
+                                       optCtrl = list(method = "bobyqa")))
+
+inc_results = bind_rows(emtrends(mod7, pairwise ~ text, var = 'efficiency_incongruent')$contrasts %>%
+                          data.frame(), 
+                        emtrends(mod7age, pairwise ~ text, var = 'efficiency_incongruent')$contrasts %>%
+                          data.frame(),
+                        emtrends(mod7, pairwise ~ purpose, var = 'efficiency_incongruent')$contrasts %>%
+                          data.frame(),
+                        emtrends(mod7age, pairwise ~ purpose, var = 'efficiency_incongruent')$contrasts %>%
+                          data.frame()) %>%
+  mutate(OR = exp(estimate), 
+         moderator = 'Incongruent Stroop')
+
+table1 = bind_rows(tom_results, fw_results, bw_results, con_results, inc_results) %>%
+  mutate(effect = str_sub(contrast, 1, 1), 
+         age_control = row_number()/2 == round(row_number()/2)) %>%
+  select(effect, moderator, age_control, OR, z.ratio, p.value) %>%
+  mutate(OR = round(OR, 2), z.ratio = round(z.ratio, 2), p.value = round(p.value, 3)) %>%
+  pivot_wider(values_from = c('OR', 'z.ratio', 'p.value'), 
+              names_glue = "{age_control}.{.value}",
+              names_from = 'age_control') %>%
+  select(effect, moderator, order(colnames(.)))
 
 dev_long$condition2 <- factor(dev_long$condition, levels = c("c", "o", "u", "n"))
-
-
 devfig1a = dev_long %>%
   group_by(condition2, group, text, purpose) %>%
   summarise(violate = mean(violation, na.rm = TRUE),
@@ -398,56 +435,6 @@ devfig1a = dev_long %>%
          color=guide_legend(nrow=2,byrow=FALSE))
 
 
-# ggsave("dev_rulesA.jpg", width = 15, height = 18, units = 'cm')
-
-glimpse(dev_long)
-
-library(flexmix)
-glm_model <- glm(violation ~ t + m, family = binomial(), data = dev_long)
-logLik(glm_model)
-AIC(glm_model)
-BIC(glm_model)
-
-model <- flexmix(violation ~ t + m, data = dev_long, k = 2)
-summary(model) # AIC: 2961.5
-dev_long$class <- posterior(model)$class
-
-post_probs <- posterior(model)  # This returns a matrix of posterior probabilities, one column per class
-
-# To get the most likely class per observation:
-assigned_classes <- apply(post_probs, 1, which.max)
-
-table(dev_long$class, dev_long$condition)
-
-table(subset(dev_long, text == purpose)$class, subset(dev_long, text == purpose)$group)
-table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group)
-
-prop.table(table(dev_long$class, dev_long$condition), 2)
-
-prop.table(
-  table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group), 2)
-
-library(brms)
-
-# Define mixture components: logistic regressions with different coefficients
-mix <- mixture(bernoulli(), bernoulli())
-
-# Formula for each component (simplified):
-formula <- bf(violation ~ t + m)
-
-# Fit 2-component mixture
-fit2 <- brm(formula, data = dev_long, family = mix, chains = 4, iter = 2000)
-
-
-# Add to your data:
-dev_long$class <- assigned_classes
-
-
-dev_long %>%
-  ggplot(aes(x = m, y = t, fill = violation)) + 
-  geom_jitter(shape = 21, width = .1, height = .1, alpha = .6) + 
-  scale_fill_gradient(low = 'red', high = 'green')
-
 kid_means = dev_long %>%
   group_by(edad, condition2, text, purpose) %>%
   summarise(violate = mean(violation, na.rm = TRUE),
@@ -458,7 +445,7 @@ kid_means = dev_long %>%
   mutate(edad_meses = edad*12 + 6) %>% filter(!is.na(edad_meses))
 
 devfig1b = dev_long %>%
-  group_by(id, condition2, text, purpose) %>%
+  group_by(child_id, condition2, text, purpose) %>%
   summarise(violate = mean(violation, na.rm = TRUE),
             edad_meses = median(edad_meses, na.rm = TRUE)) %>%
   ggplot(aes(x = edad_meses, y = violate, group = condition2)) +
@@ -500,7 +487,56 @@ ggpubr::ggarrange(devfig1a, devfig1b, nrow = 1, align = 'h',
                   widths = c(1.4, 1), labels = c('A', 'B'), 
                   hjust = c(-0.6, 1.6), vjust = c(2.2, 2.2))
 
-ggsave("dev_rules_panel.jpg", width = 24, height = 14, units = 'cm')
+ggsave("Figures/Figure2_ggplot.jpg", width = 24, height = 14, units = 'cm')
+
+
+library(flexmix)
+glm_model <- glm(violation ~ literal + moral, family = binomial(), data = dev_long)
+logLik(glm_model)
+AIC(glm_model)
+BIC(glm_model)
+
+model <- flexmix(violation ~ literal + moral, data = dev_long, k = 2)
+summary(model) # AIC: 2961.5
+
+
+post_probs <- posterior(model)  # This returns a matrix of posterior probabilities, one column per class
+
+# To get the most likely class per observation:
+assigned_classes <- apply(post_probs, 1, which.max)
+dev_long$class <- assigned_classes
+
+table(dev_long$class, dev_long$condition)
+
+table(subset(dev_long, text == purpose)$class, subset(dev_long, text == purpose)$group)
+table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group)
+
+prop.table(table(dev_long$class, dev_long$condition), 2)
+
+prop.table(
+  table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group), 2)
+
+library(brms)
+
+# Define mixture components: logistic regressions with different coefficients
+mix <- mixture(bernoulli(), bernoulli())
+
+# Formula for each component (simplified):
+formula <- bf(violation ~ literal + moral)
+
+# Fit 2-component mixture
+fit2 <- brm(formula, data = dev_long, family = mix, chains = 4, iter = 2000)
+
+
+# Add to your data:
+dev_long$class <- assigned_classes
+
+
+dev_long %>%
+  ggplot(aes(x = m, y = t, fill = violation)) + 
+  geom_jitter(shape = 21, width = .1, height = .1, alpha = .6) + 
+  scale_fill_gradient(low = 'red', high = 'green')
+
 
 
 
