@@ -112,14 +112,32 @@ colnames(supp_rules)[19:66] = c('c1t', 'c1m', 'n1t', 'n1m', 'u1t', 'u1m',  'o1t'
                                 'c5t', 'c5m', 'n5t', 'n5m', 'o5t', 'o5m', 'u5t', 'u5m',
                                 'n6t', 'n6m', 'c6t', 'c6m', 'o6t', 'o6m', 'u6t', 'u6m')
 
-ggplot(supp_rules, aes(x = LocationLongitude, y = LocationLatitude, 
-                       color = as.factor(Nielsen))) + 
-  geom_jitter()
-
 supp_rules %>%
   filter(Progress == 100) %>%
   summarise(mean(gender == 2, na.rm = TRUE), 
             n())
+
+supp_rules_long = supp_rules %>%
+  select(ResponseId, c1t:u6m) %>%
+  gather(-ResponseId, key = 'key', value = 'value') %>%
+  mutate(predictor = str_sub(key, -1, -1),
+         condition = str_sub(key, 1, 1), 
+         scenario = str_sub(key, 2, 2), 
+         value = value - 1) %>%
+  select(-key) %>%
+  pivot_wider(names_from = 'predictor', values_from = 'value') %>% 
+  rename(literal = t, moral = m) %>%
+  mutate(text = condition %in% c('c', 'o'),
+         purpose = condition %in% c('c', 'u'))
+
+mod_letter = glmer(literal ~ text + purpose + (1 | scenario) + (1 | ResponseId), supp_rules_long, family = 'binomial')
+car::Anova(mod_letter)
+jtools::summ(mod_letter, digits = 3)
+
+mod_moral = lmer(moral ~  text + purpose + (1 | scenario) + (1 | ResponseId), supp_rules_long)
+car::Anova(mod_moral)
+jtools::summ(mod_moral, digits = 3)
+
 
 supp_means = supp_rules %>%
   select(c1t:u6m) %>%
@@ -128,7 +146,7 @@ supp_means = supp_rules %>%
          key = str_sub(key, 1, 2)) %>%
   group_by(key, predictor) %>%
   summarise(mean_value = mean(value, na.rm = TRUE)) %>%
-  pivot_wider(names_from = 'predictor', values_from = 'mean_value') %>%
+  pivot_wider(names_from = 'predictor', values_from = 'mean_value') %>% 
   rename(literal = t, moral = m) %>%
   mutate(moral = (5 - mean(moral))/4, 
          literal = 2 - mean(literal))
@@ -138,6 +156,9 @@ supp_means %>%
   summarise(mean(moral), 
             mean(literal))
 
+supp_children <- read_excel("Data/data_reglas.xlsx") %>%
+  filter(!is.na(CODIGO))
+
 names(supp_children) = c('child_id', 'codigo2', 'grupo', 'sex',
                          'edad', 'edad_meses', 'date', 'birth_date',
                          'stroop_score', 'tom_1', 'tom_2', 'tom_3',
@@ -145,9 +166,6 @@ names(supp_children) = c('child_id', 'codigo2', 'grupo', 'sex',
                          'tom_9', 'tom_total', 'comments_tom', 'forward',
                          'fwd_score', 'span_1', 'backward', 'bwd_score',
                          'span_2', 'comments')
-
-supp_children <- read_excel("Data/data_reglas.xlsx") %>%
-  filter(!is.na(CODIGO))
 
 dev_long = left_join(dev_long, supp_children, by = 'child_id') %>%
   mutate(stroop_ctr = stroop_score - 22,
@@ -219,14 +237,6 @@ dev_long = dev_long %>%
   mutate(efficiency_congruent = scale(rt_Con/resp_Con)[,1],
          efficiency_incongruent = scale(rt_Inc/resp_Inc)[,1], 
          meses_z = scale(edad_meses)[,1])
-
-mod2 = glmer(violation ~ meses_ctr * (text * purpose) + (1 | subj_id) + (1 | scen),
-             data = dev_long, family = 'binomial', 
-             control = glmerControl(optimizer = "optimx", 
-                                    optCtrl = list(method = "nlminb")))
-car::Anova(mod2)
-emtrends(mod2, pairwise ~ text, var = 'meses_ctr')
-emtrends(mod2, pairwise ~ purpose, var = 'meses_ctr')
 
 children_cog_measures = dev_long %>%
   select(child_id, edad_meses, tom_total, forward, backward, 
@@ -396,6 +406,7 @@ table1 = bind_rows(tom_results, fw_results, bw_results, con_results, inc_results
   select(effect, moderator, order(colnames(.)))
 
 dev_long$condition2 <- factor(dev_long$condition, levels = c("c", "o", "u", "n"))
+
 devfig1a = dev_long %>%
   group_by(condition2, group, text, purpose) %>%
   summarise(violate = mean(violation, na.rm = TRUE),
@@ -490,80 +501,6 @@ ggpubr::ggarrange(devfig1a, devfig1b, nrow = 1, align = 'h',
 ggsave("Figures/Figure2_ggplot.jpg", width = 24, height = 14, units = 'cm')
 
 
-library(flexmix)
-glm_model <- glm(violation ~ literal + moral, family = binomial(), data = dev_long)
-logLik(glm_model)
-AIC(glm_model)
-BIC(glm_model)
-
-model <- flexmix(violation ~ literal + moral, data = dev_long, k = 2)
-summary(model) # AIC: 2961.5
-
-
-post_probs <- posterior(model)  # This returns a matrix of posterior probabilities, one column per class
-
-# To get the most likely class per observation:
-assigned_classes <- apply(post_probs, 1, which.max)
-dev_long$class <- assigned_classes
-
-table(dev_long$class, dev_long$condition)
-
-table(subset(dev_long, text == purpose)$class, subset(dev_long, text == purpose)$group)
-table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group)
-
-prop.table(table(dev_long$class, dev_long$condition), 2)
-
-prop.table(
-  table(subset(dev_long, text != purpose)$class, subset(dev_long, text != purpose)$group), 2)
-
-library(brms)
-
-# Define mixture components: logistic regressions with different coefficients
-mix <- mixture(bernoulli(), bernoulli())
-
-# Formula for each component (simplified):
-formula <- bf(violation ~ literal + moral)
-
-# Fit 2-component mixture
-fit2 <- brm(formula, data = dev_long, family = mix, chains = 4, iter = 2000)
-
-
-# Add to your data:
-dev_long$class <- assigned_classes
-
-
-dev_long %>%
-  ggplot(aes(x = m, y = t, fill = violation)) + 
-  geom_jitter(shape = 21, width = .1, height = .1, alpha = .6) + 
-  scale_fill_gradient(low = 'red', high = 'green')
-
-
-
-
-model_s = glmer(violation ~ meses_ctr * (t + m) + (1 | ResponseId) + (1 | scen),
-                data = dev_long, family = 'binomial', 
-                control = glmerControl(optimizer = "optimx", 
-                                       optCtrl = list(method = "nlminb")))
-car::Anova(model_s)
-jtools::summ(model_s, digits = 3)
-
-emtrends(model_s, pairwise ~ group, var = 'm')
-emtrends(model_s, pairwise ~ group, var = 't')
-
-interactions::sim_slopes(model_s, pred = 'm', modx = 'group', digits = 3)
-interactions::sim_slopes(model_s, pred = 't', modx = 'group', digits = 3)
-
-
-
-cor.test(~ m + violation, subset(dev_long, group == 'peques')) .67
-cor.test(~ t + violation, subset(dev_long, group == 'peques')) .30
-cor.test(~ m + violation, subset(dev_long, group == 'adultos1')) .47
-cor.test(~ t + violation, subset(dev_long, group == 'adultos1')) .58
-cor.test(~ m + violation, subset(dev_long, group == 'adultos2')) .46
-cor.test(~ t + violation, subset(dev_long, group == 'adultos2')) .58
-
-
-
 pcor_ci.test <-
   function (x, y, z, method = c("pearson", "kendall", "spearman"), conf.level = 0.95, ...) {
     d1 <- deparse(substitute(x))
@@ -612,10 +549,10 @@ supp_group <- data.frame(
   stringsAsFactors = FALSE  # avoids auto-conversion of characters to factors
 )
 
-for (i in c("peques", "adultos1", "adultos2")) {
+for (i in levels(dev_long$group)) {
   temp = pcor_ci.test(subset(dev_long, group == i)$violation, 
-                      subset(dev_long, group == i)$t, 
-                      subset(dev_long, group == i)$m)
+                      subset(dev_long, group == i)$literal, 
+                      subset(dev_long, group == i)$moral)
   
   new_row = c(group = i, predictor = 'Text', 
               as.numeric(temp$estimate), 
@@ -626,8 +563,8 @@ for (i in c("peques", "adultos1", "adultos2")) {
   supp_group = bind_rows(supp_group, new_row)
   
   temp = pcor_ci.test(subset(dev_long, group == i)$violation, 
-                      subset(dev_long, group == i)$m, 
-                      subset(dev_long, group == i)$t)
+                      subset(dev_long, group == i)$moral, 
+                      subset(dev_long, group == i)$literal)
   
   new_row = c(group = i, predictor = 'Moral', 
               as.numeric(temp$estimate), 
@@ -640,39 +577,15 @@ for (i in c("peques", "adultos1", "adultos2")) {
 }
 
 supp_group = supp_group %>% 
-  mutate(age_order = case_when(group == 'peques' ~ 1,
-                               group == 'adultos1' ~ 2,
-                               group == 'adultos2' ~ 3),
-         group_label = case_when(group == 'peques' ~ 'Children\n5-8',
-                                 group == 'adultos1' ~ 'Young Adults\n18-25',
-                                 group == 'adultos2' ~ 'Older Adults\n45-65'), 
+  mutate(age_order = case_when(group == 'Children' ~ 1,
+                               group == 'Adults (18-25)' ~ 2,
+                               group == 'Adults (45-65)' ~ 3),
+         group_label = case_when(group == 'Children' ~ 'Children\n5-8',
+                                 group == 'Adults (18-25)' ~ 'Young Adults\n18-25',
+                                 group == 'Adults (45-65)' ~ 'Older Adults\n45-65'), 
          Aggregate = if_else(predictor == 'Text', as.numeric(Aggregate), -as.numeric(Aggregate)), 
          lower_ci = if_else(predictor == 'Text', as.numeric(lower_ci), -as.numeric(lower_ci)),
          upper_ci = if_else(predictor == 'Text', as.numeric(upper_ci), -as.numeric(upper_ci)))
-
-pcor_ci.test(subset(dev_long, group == 'adultos2')$violation, 
-             subset(dev_long, group == 'adultos2')$t, 
-             subset(dev_long, group == 'adultos2')$m)
-
-pcor_ci.test(subset(dev_long, group == 'adultos2')$violation, 
-             subset(dev_long, group == 'adultos2')$m, 
-             subset(dev_long, group == 'adultos2')$t)
-
-pcor_ci.test(subset(dev_long, group == 'adultos1')$violation, 
-             subset(dev_long, group == 'adultos1')$t, 
-             subset(dev_long, group == 'adultos1')$m)
-
-pcor_ci.test(subset(dev_long, group == 'adultos1')$violation, 
-             subset(dev_long, group == 'adultos1')$m, 
-             subset(dev_long, group == 'adultos1')$t)
-
-pcor_ci.test(subset(dev_long, group == 'peques')$violation, 
-             subset(dev_long, group == 'peques')$t, 
-             subset(dev_long, group == 'peques')$m)
-
-pcor_ci.test(subset(dev_long, group == 'peques')$violation, 
-             subset(dev_long, group == 'peques')$m, 
-             subset(dev_long, group == 'peques')$t)
 
 
 supp_results <- data.frame(
@@ -684,9 +597,9 @@ supp_results <- data.frame(
   stringsAsFactors = FALSE  # avoids auto-conversion of characters to factors
 )
 
-for (i in levels(as.factor(dev_long$ResponseId))) {
-  temp= subset(dev_long, ResponseId == i)
-  model_s = lm(violation ~ m + t, 
+for (i in levels(as.factor(dev_long$subj_id))) {
+  temp = subset(dev_long, subj_id == i)
+  model_s = lm(violation ~ moral + literal, 
                temp)
   
   group = temp %>% select(group) %>% unique()
@@ -699,7 +612,7 @@ for (i in levels(as.factor(dev_long$ResponseId))) {
 
 supp_results2 <- data.frame(
   group = character(),
-  ResponseId = character(),
+  subj_id = character(),
   Textual = numeric(),
   Moral = numeric(),
   Textual_p = numeric(),
@@ -707,13 +620,13 @@ supp_results2 <- data.frame(
   stringsAsFactors = FALSE  # avoids auto-conversion of characters to factors
 )
 
-for (i in levels(as.factor(dev_long$ResponseId))) {
-  temp= subset(dev_long, ResponseId == i)
+for (i in levels(as.factor(dev_long$subj_id))) {
+  temp= subset(dev_long, subj_id == i)
   
-  m_coef = cor.test(~ m + violation, temp)$estimate
-  t_coef = cor.test(~ t + violation, temp)$estimate
-  m_pval = cor.test(~ m + violation, temp)$p.value
-  t_pval = cor.test(~ t + violation, temp)$p.value
+  m_coef = cor.test(~ moral + violation, temp)$estimate
+  t_coef = cor.test(~ literal + violation, temp)$estimate
+  m_pval = cor.test(~ moral + violation, temp)$p.value
+  t_pval = cor.test(~ literal + violation, temp)$p.value
   group = temp %>% select(group) %>% unique()
   
   new_row = data.frame(group, i, t_coef, m_coef, t_pval, m_pval)
@@ -728,13 +641,13 @@ supp_results2 %>%
   facet_grid(. ~ key)
 
 devcog_param = dev_long %>%
-  select(id, ResponseId, backward, tom_total, edad_meses,
+  select(child_id, subj_id, backward, tom_total, edad_meses,
          rt_Con:resp_Inc) %>%
   unique(.) %>%
   mutate(efficiency_congruent = rt_Con/resp_Con,
          backward = as.numeric(backward),
          efficiency_incongruent = rt_Inc/resp_Inc) %>%
-  left_join(supp_results2, by = 'ResponseId')
+  left_join(supp_results2, by = 'subj_id')
 
 cor.test(~ as.numeric(tom_total) + Textual, devcog_param, method = 'spearman')
 cor.test(~ as.numeric(tom_total) + Moral, devcog_param, method = 'spearman')
@@ -747,7 +660,7 @@ modT = lm(Textual ~ edad_meses,
           devcog_param)
 jtools::summ(modT, digits = 3)
 
-modT1 = lm(Textual ~ efficiency_incongruent +  bw_ctr + edad_meses, 
+modT1 = lm(Textual ~ efficiency_incongruent +  backward + edad_meses, 
            devcog_param)
 jtools::summ(modT1, digits = 3)
 
@@ -756,6 +669,41 @@ anova(modT, modT1)
 ## previous color schme
 #scale_fill_manual(values = c('#009E73', '#E69F00')) +
 # scale_color_manual(values = c('#009E73', '#E69F00')) +
+
+d4 = supp_results2 %>%
+  mutate(age_order = case_when(group == 'Children' ~ 1,
+                               group == 'Adults (18-25)' ~ 2,
+                               group == 'Adults (45-65)' ~ 3),
+         group_label = case_when(group == 'Children' ~ 'Children\n5-8',
+                                 group == 'Adults (18-25)' ~ 'Young Adults\n18-25',
+                                 group == 'Adults (45-65)' ~ 'Older Adults\n45-65'))  %>%
+  ggplot() + 
+  geom_col(aes(x = reorder(subj_id, Moral-Textual), y = Textual, alpha = Textual_p < .05), color = '#7570B3', fill = 'lightgrey',
+           linewidth = .3, width = 1) +
+  geom_col(aes(x = reorder(subj_id, Moral-Textual), y = -Moral, alpha = Moral_p < .05), color = '#1B9E77',  fill = 'lightgrey',
+           linewidth = .3, width = 1) +
+  geom_hline(yintercept = 0, linetype = 1, linewidth = .3) +
+  geom_rect(data = supp_group, aes(ymin = lower_ci, 
+                                   ymax = upper_ci, fill = predictor), 
+            xmin = -Inf, xmax = Inf, alpha = .2)+
+  geom_hline(data = supp_group, aes(yintercept = Aggregate, color = predictor), linetype = 2)+
+  scale_y_continuous(name = 'Correlation coefficients', breaks = seq(-1, 1, .25), 
+                     labels = c("1", ".75", ".50", ".25", "0", ".25", ".50", ".75", "1"),
+                     limits = c(-1, 1), expand = c(0, 0),
+                     sec.axis = dup_axis(name = NULL, 
+                                         breaks = c(-.5, .5), 
+                                         labels = c('Moral\nappraisal', 'Literal\nappraisal'))) +
+  facet_grid(. ~ reorder(group_label, age_order), space = 'free_y', scale = 'free_x') + 
+  theme_classic() + 
+  scale_fill_manual(values = c("#1B9E77", "#7570B3")) +
+  scale_color_manual(values = c("#1B9E77", "#7570B3")) +
+  scale_alpha_manual(values = c(.1, .7)) +
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(size = 10, angle = 0),
+        axis.ticks = element_blank(), 
+        axis.title.x = element_blank(),
+        strip.background = element_blank(), 
+        legend.position = 'none')
 
 a4 = devcog_param %>%
   gather(Textual,Moral, key = 'param', value = 'resp') %>%
@@ -830,56 +778,12 @@ ggpubr::ggarrange(d4, ggpubr::ggarrange(a4, b4, c4, ncol = 1,
 ggsave("dev_rules_panel3.jpg", width = 24, height = 14, units = 'cm')
 
 
-ggplot(devcog_param)
-
-BIS <- function(data) {
-  n <- length(data$group)    # sample size to correct var()-function result (which uses n-1)
-  srt <- sqrt( ((n-1)/n) * var(data$mean_rt_c) )     # sample standard deviation across all rts
-  spc <- sqrt( ((n-1)/n) * var(data$pc) )            # sample standard deviation across all rts
-  mrt <- mean(data$mean_rt_c)                        # mean across all rts
-  mpc <- mean(data$pc)                               # mean across all pcs
-  zrt <- (data$mean_rt_c-mrt)/srt                    # standardized rts
-  zpc <- (data$pc-mpc)/spc                           # z-standardized pcs
-  data$bis <- zpc - zrt                              # Balanced Integration Score
-  
-  return(data)                                       # return data.frame with added variable 'bis'
-}
-
-#######################################################################################################
-#######################################################################################################
-# Example
-
-#...either create an example dataframe (here called data)
-mean_rt_c <- c(356.8,325.1,370.6,362.8,348.5,640.3,634.2,650.7,584.5,610.0)
-pc <- c(0.71,0.73,0.67,0.73,0.72,0.97,0.99,0.99,0.97,0.97)
-group <- c(1,1,1,1,1,2,2,2,2,2)
-data <- data.frame(group,mean_rt_c,pc)
-
-# call BIS with dataframe data as argument
-data <- BIS(data)
-
-glimpse(data2)
-data2 = devcog_param %>%
-  rename(mean_rt_c = rt_Inc, pc = resp_Con) %>%
-  mutate(group = 1) %>% filter(!is.na(mean_rt_c)) %>%
-  select(group, mean_rt_c, pc) 
-
-n <- length(data2$group)    # sample size to correct var()-function result (which uses n-1)
-srt <- sqrt( ((n-1)/n) * var(data2$mean_rt_c))     # sample standard deviation across all rts
-spc <- sqrt( ((n-1)/n) * var(data2$pc) )            # sample standard deviation across all rts
-mrt <- mean(data2$mean_rt_c)                        # mean across all rts
-mpc <- mean(data2$pc)                               # mean across all pcs
-zrt <- (data2$mean_rt_c-mrt)/srt                    # standardized rts
-zpc <- (data2$pc-mpc)/spc                           # z-standardized pcs
-data2$bis <- zpc - zrt   
-
-BIS(data2)
 
 modP = lm(Moral ~ edad_meses, 
           devcog_param)
 jtools::summ(modP, digits = 3)
 
-modP1 = lm(Moral ~ efficiency_incongruent +  bw_ctr + edad_meses, 
+modP1 = lm(Moral ~ efficiency_incongruent +  backward + edad_meses, 
            devcog_param)
 jtools::summ(modP1, digits = 3)
 
@@ -888,103 +792,3 @@ cor.test(~ backward + Moral, devcog_param, method = 'spearman')
 
 cor.test(~ efficiency_incongruent + Textual, devcog_param, method = 'spearman')
 cor.test(~ efficiency_incongruent + Moral, devcog_param, method = 'spearman')
-
-anova(modP, modP1)
-
-supp_results2 %>%
-  mutate(Textual = if_else(Textual < 0, 0, Textual),
-         Moral = if_else(Moral < 0, 0, Moral)) %>%
-  ggplot(aes(x = reorder(ResponseId, Moral-Textual))) + 
-  geom_col(aes(y = Textual, color = group, alpha = Textual_p < .05), fill = 'grey',
-           linewidth = .2, width = 1) +
-  geom_col(aes(y = -Moral, color = group, alpha = Moral_p < .05),  fill = 'grey',
-           linewidth = .2, width = 1) +
-  geom_hline(yintercept = 0, linetype = 2) +
-  scale_alpha_manual(values = c(.2, .7)) +
-  facet_grid(. ~ reorder(group, -Moral), space = 'free_y', scale = 'free_x') + 
-  theme_classic()
-
-d4 = supp_results2 %>%
-  mutate(Textual = if_else(Textual < 0, 0, Textual),
-         Moral = if_else(Moral < 0, 0, Moral), 
-         age_order = case_when(group == 'peques' ~ 1,
-                               group == 'adultos1' ~ 2,
-                               group == 'adultos2' ~ 3),
-         group_label = case_when(group == 'peques' ~ 'Children\n5-8',
-                                 group == 'adultos1' ~ 'Young Adults\n18-25',
-                                 group == 'adultos2' ~ 'Older Adults\n45-65')) %>%
-  ggplot() + 
-  geom_col(aes(x = reorder(ResponseId, Moral-Textual), y = Textual, alpha = Textual_p < .05), color = '#7570B3', fill = 'lightgrey',
-           linewidth = .3, width = 1) +
-  geom_col(aes(x = reorder(ResponseId, Moral-Textual), y = -Moral, alpha = Moral_p < .05), color = '#1B9E77',  fill = 'lightgrey',
-           linewidth = .3, width = 1) +
-  geom_hline(yintercept = 0, linetype = 1, linewidth = .3) +
-  geom_rect(data = supp_group, aes(ymin = lower_ci, 
-                                   ymax = upper_ci, fill = predictor), 
-            xmin = -Inf, xmax = Inf, alpha = .2)+
-  geom_hline(data = supp_group, aes(yintercept = Aggregate, color = predictor), linetype = 2)+
-  scale_y_continuous(name = 'Correlation coefficients', breaks = seq(-1, 1, .25), 
-                     labels = c("1", ".75", ".50", ".25", "0", ".25", ".50", ".75", "1"),
-                     limits = c(-1, 1), expand = c(0, 0),
-                     sec.axis = dup_axis(name = NULL, 
-                                         breaks = c(-.5, .5), 
-                                         labels = c('Moral\nreasoning', 'Textualist\nreasoning'))) +
-  facet_grid(. ~ reorder(group_label, age_order), space = 'free_y', scale = 'free_x') + 
-  theme_classic() + 
-  scale_fill_manual(values = c("#1B9E77", "#7570B3")) +
-  scale_color_manual(values = c("#1B9E77", "#7570B3")) +
-  scale_alpha_manual(values = c(.1, .7)) +
-  theme(axis.text.x = element_blank(), 
-        axis.text.y = element_text(size = 10, angle = 0),
-        axis.ticks = element_blank(), 
-        axis.title.x = element_blank(),
-        strip.background = element_blank(), 
-        legend.position = 'none')
-
-ggsave("dev_rules2.jpg", width = 10, height = 15, units = 'cm')
-
-supp_results %>%
-  mutate(Textual = if_else(Textual < 0, 0, Textual),
-         Moral = if_else(Moral < 0, 0, Moral), 
-         age_order = case_when(group == 'peques' ~ 1,
-                               group == 'adultos1' ~ 2,
-                               group == 'adultos2' ~ 3)) %>%
-  ggplot(aes(x = reorder(ResponseId, Moral-Textual))) + 
-  geom_col(aes(y = Textual, color = group), alpha = .7, fill = 'grey',
-           linewidth = .2, width = 1) +
-  geom_col(aes(y = -Moral, color = group), alpha = .3, fill = 'white',
-           linewidth = .2, width = 1) +
-  geom_hline(yintercept = 0, linetype = 2) + coord_flip() +
-  facet_grid(reorder(group, -age_order) ~ ., space = 'free_x', scale = 'free_y') + 
-  theme_classic()
-
-
-devy_means = devy %>%
-  select(ResponseId, age) %>%
-  full_join(., supp_results, by = 'ResponseId') %>%
-  gather(Intercept:Textual, key = 'parameter', value = 'value', na.rm = TRUE) %>%
-  group_by(group, parameter) %>%
-  summarise(value = mean(value, na.rm = TRUE), 
-            age = mean(age, na.rm = TRUE))
-
-mod_coefs = devy %>%
-  select(ResponseId, age) %>%
-  full_join(., supp_results, by = 'ResponseId') %>%
-  gather(Intercept:Textual, key = 'parameter', value = 'value', na.rm = TRUE) %>%
-  lm(value ~ parameter * group, data = .) %>%
-  emmeans(., ~ parameter | group) %>% data.frame() %>%
-  mutate(age = case_when(group == 'peques' ~ 6.6,
-                         group == 'adultos1' ~ 52,
-                         group == 'adultos2' ~ 22.9))
-
-devy %>%
-  select(ResponseId, age) %>%
-  full_join(., supp_results, by = 'ResponseId') %>%
-  gather(Intercept:Textual, key = 'parameter', value = 'value', na.rm = TRUE) %>%
-  ggplot(aes(x = age, y = value, color = parameter)) + 
-  geom_jitter(alpha = .3) + geom_line(data = mod_coefs, aes(y = emmean), linetype = 2) +
-  geom_ribbon(data = mod_coefs, 
-              aes(ymin = lower.CL, ymax = upper.CL, y = emmean, fill = parameter), 
-              color = 'transparent', alpha = .2) +
-  geom_point(data = mod_coefs, aes(y = emmean), size = 3, stroke = 2, shape = 21, fill = 'white') 
-
