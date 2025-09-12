@@ -1,6 +1,13 @@
 # From spirit to letter: A developmental reversal in children’s understanding of rules
 
 Materials, data and scripts for a study on children's developing concept of rule.
+This repository contains: 
+
+- The analysis [script](dev_rules.R)
+- A [data](dev_rules.R) folder, with raw, anonymized data.
+- A [figures](Figures/) folder, containing visualizations.
+- A [materials](Materials/) folder
+- An [analysis](Analysis/) folder with supplementary outputs of the analysis script.
 
 ## Author information
 

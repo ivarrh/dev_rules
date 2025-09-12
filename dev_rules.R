@@ -4,6 +4,7 @@ library(emmeans)
 library(readxl)
 library(lmerTest)
 library(optimx)
+library(logistf)
 
 filename1 = "Data/child_data.csv"
 # Deleting 1st column
@@ -122,20 +123,28 @@ supp_rules_long = supp_rules %>%
   gather(-ResponseId, key = 'key', value = 'value') %>%
   mutate(predictor = str_sub(key, -1, -1),
          condition = str_sub(key, 1, 1), 
-         scenario = str_sub(key, 2, 2), 
-         value = value - 1) %>%
+         scenario = str_sub(key, 2, 2)) %>%
   select(-key) %>%
   pivot_wider(names_from = 'predictor', values_from = 'value') %>% 
   rename(literal = t, moral = m) %>%
-  mutate(text = condition %in% c('c', 'o'),
+  mutate(literal = 2 - literal, 
+         moral = (5 - moral)/4,
+         text = condition %in% c('c', 'o'),
          purpose = condition %in% c('c', 'u'))
 
-mod_letter = glmer(literal ~ text + purpose + (1 | scenario) + (1 | ResponseId), supp_rules_long, family = 'binomial')
+mod_letter = glmer(literal ~ text + purpose + (1 | scenario), supp_rules_long, 
+                   family = 'binomial', control = glmerControl(optimizer = "optimx", 
+                                                             optCtrl = list(method = "bobyqa")))
 car::Anova(mod_letter)
-jtools::summ(mod_letter, digits = 3)
+emmeans(mod_letter, pairwise ~ text, type = 'response')
+emmeans(mod_letter, pairwise ~ purpose, type = 'response')
+emmeans(mod_letter, ~ text * purpose, type = 'response')
+jtools::summ(mod_letter, digits = 3, exp = TRUE)
 
 mod_moral = lmer(moral ~  text + purpose + (1 | scenario) + (1 | ResponseId), supp_rules_long)
 car::Anova(mod_moral)
+emmeans(mod_moral, pairwise ~ text, type = 'response')
+emmeans(mod_moral, pairwise ~ purpose, type = 'response')
 jtools::summ(mod_moral, digits = 3)
 
 
@@ -248,6 +257,48 @@ children_cog_measures = dev_long %>%
          efficiency_incongruent = rt_Inc/resp_Inc) %>%
   select(-rt_Con, -resp_Con, -rt_Inc, -resp_Inc)
 
+firth_params_all <- data.frame(
+  group = character(),
+  subj_id = character(),
+  intercept = character(),
+  text = character(),
+  purpose = character()
+)
+
+for (i in levels(as.factor(dev_long$subj_id))) {
+  temp = subset(dev_long, subj_id == i)
+  
+  mod_temp = logistf(violation ~ text + purpose,
+                     data = temp)
+  
+  temp_results = summary(mod_temp)$coefficients
+  new_row = c(as.character(temp$group[1]), i, temp_results) 
+  names(new_row) = names(firth_params_all)
+  
+  firth_params_all = rbind(firth_params_all, new_row)
+}
+
+names(firth_params_all) = c('group', 'subj_id', 'intercept', 'text', 'purpose')
+
+firth_params_all = firth_params_all %>%
+  mutate(intercept = as.double(intercept),
+         text = as.double(text),
+         purpose = as.double(purpose))
+
+firth_params_all %>%
+  gather(text:purpose, key = 'parameter', value = 'coef') %>%
+  ggplot(aes(x = reorder(group, coef),  y = coef, fill = parameter)) + 
+  facet_grid(. ~ parameter) + coord_flip() + 
+  geom_violin(color = 'darkgrey', alpha = .4, trim = FALSE, draw_quantiles = c(.25, .75))
+
+
+firth_params_all %>%
+  summarise(
+    median(intercept), 
+    median(text), 
+    median(purpose)
+  )
+
 firth_params <- data.frame(
   child_id = character(),
   intercept = character(),
@@ -274,6 +325,11 @@ firth_params = firth_params %>%
   mutate(intercept = as.double(intercept),
          text = as.double(text),
          purpose = as.double(purpose))
+
+firth_params %>%
+  gather(-child_id, key = 'parameter', value = 'coef') %>%
+  ggplot(aes(x = parameter,  y = coef, fill = parameter)) + 
+  geom_violin(color = 'darkgrey', alpha = .4, trim = FALSE, draw_quantiles = c(.25, .75))
 
 children_all_measures = full_join(children_cog_measures, firth_params)
 
@@ -775,7 +831,7 @@ ggpubr::ggarrange(d4, ggpubr::ggarrange(a4, b4, c4, ncol = 1,
                   ncol = 2, labels = c('A', ''), widths = c(1.2, 1))
 
 
-ggsave("dev_rules_panel3.jpg", width = 24, height = 14, units = 'cm')
+ggsave("Figures/Figure3.jpg", width = 24, height = 14, units = 'cm')
 
 
 
