@@ -285,12 +285,35 @@ firth_params_all = firth_params_all %>%
          text = as.double(text),
          purpose = as.double(purpose))
 
-firth_params_all %>%
-  gather(text:purpose, key = 'parameter', value = 'coef') %>%
-  ggplot(aes(x = reorder(group, coef),  y = coef, fill = parameter)) + 
-  facet_grid(. ~ parameter) + coord_flip() + 
-  geom_violin(color = 'darkgrey', alpha = .4, trim = FALSE, draw_quantiles = c(.25, .75))
+firth_params_means = firth_params_all %>%
+  rename(Text = text, Purpose = purpose) %>%
+  gather(Text:Purpose, key = 'parameter', value = 'coef') %>%
+  group_by(group, parameter) %>%
+  summarise(coef = mean(coef, na.rm = TRUE))
 
+firth_params_all %>%
+  rename(Text = text, Purpose = purpose) %>%
+  gather(Text:Purpose, key = 'parameter', value = 'coef') %>%
+  ggplot(aes(x = reorder(group, coef),  y = coef, fill = parameter)) + 
+  facet_grid(. ~ reorder(parameter, coef)) + coord_flip() + 
+  geom_hline(yintercept = 0, linetype = 2, color = 'darkgrey') +
+  geom_violin(color = 'darkgrey', alpha = .4, trim = FALSE, draw_quantiles = c(.25, .75)) + 
+  geom_point(data = firth_params_means, aes(color = parameter),
+             shape = 21, fill = 'white', size = 3, stroke = 1) +
+  theme_classic() + 
+  scale_fill_manual(values = c("#1B9E77", "#7570B3"), name = "Parameter") + 
+  scale_color_manual(values = c("#1B9E77", "#7570B3")) + 
+  scale_y_continuous(name = "Parameter", breaks = seq(-3, 6, 3), 
+                     expand = c(0, 0), limits = c(-3, 7)) +
+  scale_x_discrete(name = NULL) +
+  theme(legend.position = 'none',
+        text = element_text(size = 14, family = 'Helvetica Neue', 
+                            color = 'black'),
+        strip.background = element_blank(),
+        panel.grid.major.x = element_line(), 
+        axis.ticks = element_blank())
+
+ggsave("Figures/SuppFigure1.jpg", width = 13, height = 9, units = 'cm')
 
 firth_params_all %>%
   summarise(
@@ -496,7 +519,7 @@ devfig1a = dev_long %>%
                             color = 'black'),
         plot.margin = unit(c(.4, .8, .2, .2), 'cm'),
         legend.title = element_blank(), 
-        legend.text = element_text(size = 11, family = 'Helvetica Neue', 
+        legend.text = element_text(size = 9, family = 'Helvetica Neue', 
                                    color = 'black')) +
   guides(linetype = FALSE, fill = FALSE, 
          color=guide_legend(nrow=2,byrow=FALSE))
@@ -551,10 +574,10 @@ devfig1b = dev_long %>%
 
 
 ggpubr::ggarrange(devfig1a, devfig1b, nrow = 1, align = 'h', 
-                  widths = c(1.4, 1), labels = c('A', 'B'), 
+                  widths = c(1.4, 1), labels = c('B', 'C'), 
                   hjust = c(-0.6, 1.6), vjust = c(2.2, 2.2))
 
-ggsave("Figures/Figure2_ggplot.jpg", width = 24, height = 14, units = 'cm')
+ggsave("Figures/Figure2_ggplot.jpg", width = 22, height = 12, units = 'cm')
 
 
 pcor_ci.test <-
